@@ -42,13 +42,7 @@ var CLIENT_ID = '481587742723.apps.googleusercontent.com',
 
 var auth, client;
 
-var tokens /* = { 
-  access_token: 'ya29.AHES6ZRXGsn5YOlB5r7L2fbaG0vpyE-DMwuMFs63ksu_wJQ',
-  token_type: 'Bearer',
-  expires_in: 3600,
-  refresh_token: '1/WDepVOjW8VaSmMI57OKKKHyZjVrB8px8v-x2hfdI_YM' 
-} */
-
+var tokens;
 var FIELDS='items(fileSize,id,mimeType,title,createdDate),nextPageToken';
 
 
