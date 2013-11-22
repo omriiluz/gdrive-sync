@@ -358,23 +358,6 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
   };
 }
 
-function aagsync(src, dst){
-  listFiles('\'root\' in parents and title=\'Pictures\' and mimeType=\'application/vnd.google-apps.folder\'', function(files){
-    if (0 && files.length==1){
-      compare('z:/Media/Pictures', files[0].id, function(err,result){
-        if (err)console.log(err);
-        //console.log(result);
-        console.log('file,size,tosync')
-        result.forEach(function(element, index, array){
-          console.log(element.file+ ',' + element.local.size + ',' + ((!!element.remote && element.local.size==element.remote.size)?'0':'1'));
-        });
-        process.exit(0)
-      })
-    }
-    upload(files[0].id, 'C:/temp/test-gsync/2003-11-21T03_40_22R76339.JPG');
-  });
-}; 
-
 function listFiles(q, callback){
   client.drive.files
   .list({'maxResults': 100, 'q': q, 'fields': FIELDS}).withAuthClient(auth).execute(function(err,resp) {
@@ -389,12 +372,12 @@ var retrieved=0;
  *
  * @param {Function} callback Function to call when the request is complete.
  */
-function retrieveAllFiles(q,callback) {
+function retrieveAllFiles(q, errCount, callback) {
   var retrievePageOfFiles = function(request, result, q) {
     request.withAuthClient(auth).execute(function(err,resp) {
       if (err){
           console.log(err);
-          callback(null);
+          callback(err, errCount);
       } else {
         result = result.concat(resp.items);
         retrieved+=result.length;
@@ -409,7 +392,7 @@ function retrieveAllFiles(q,callback) {
           });
           retrievePageOfFiles(request, result, q);
         } else {
-          callback(result);
+          callback(null, errCount, result);
         }
       }
     });
@@ -443,46 +426,65 @@ function findFolder(parent,title, resp){
     resp(null);
 }
 
-function retrieveRemoteFolder(parent, resp){
+function retrieveRemoteFolder(parent, errCount, resp){
   if (!!parent)
-    retrieveAllFiles('\''+parent+'\' in parents', resp);
+    retrieveAllFiles('\''+parent+'\' in parents', errCount, resp);
   else
-    resp(null);
+    resp();
 }
 
 function compare(localdir, remotedir, done) {
-  var results = [];
-  var remotefiles = [];
-  retrieveRemoteFolder(remotedir,function(result){
-    for (var item in result){remotefiles[result[item].title]=result[item]};
-    fs.readdir(localdir, function(err, list) {
-      if (err) return done(err);
-      var pending = list.length;
-      if (!pending) return done(null, results);
-      list.forEach(function(filename){
-        var file = localdir + '/' + filename;
-        fs.stat(file, function(err, stat) {
-          if (stat && stat.isDirectory()) {
-            var rdir=null;
-            if (!!remotefiles[filename] && remotefiles[filename].mimeType=='application/vnd.google-apps.folder') rdir=remotefiles[filename].id;
-            compare(file, rdir, function(err, res) {
-              results = results.concat(res);
-              if (!--pending) done(null, results);
-            });           
-          } else {
-            results.push({
-              'file': file,
-              'local': {
-                'size': stat.size, 
-                'created': stat.ctime},
-              'remote': !!remotefiles[filename]?{
-                'size': remotefiles[filename].fileSize, 
-                'created': remotefiles[filename].createdDate} : null
-            });
-            if (!--pending) done(null, results);
-          }
-        });
-      });
-    });
-  });
+  	var results = [];
+  	var remotefiles = [];
+  	function compareInner(localdir,result, done){
+		for (var item in result){remotefiles[result[item].title]=result[item]};
+	    fs.readdir(localdir, function(err, list) {
+	      if (err) return done(err);
+	      var pending = list.length;
+	      if (!pending) return done(null, results);
+	      list.forEach(function(filename){
+	        var file = localdir + '/' + filename;
+	        fs.stat(file, function(err, stat) {
+	          if (stat && stat.isDirectory()) {
+	            var rdir=null;
+	            if (!!remotefiles[filename] && remotefiles[filename].mimeType=='application/vnd.google-apps.folder') rdir=remotefiles[filename].id;
+	            compare(file, rdir, function(err, res) {
+	              results = results.concat(res);
+	              if (!--pending) done(null, results);
+	            });           
+	          } else {
+	            results.push({
+	              'file': file,
+	              'local': {
+	                'size': stat.size, 
+	                'created': stat.ctime},
+	              'remote': !!remotefiles[filename]?{
+	                'size': remotefiles[filename].fileSize, 
+	                'created': remotefiles[filename].createdDate} : null
+	            });
+	            if (!--pending) done(null, results);
+	          }
+	        });
+	      });
+	    });
+	}
+
+	function retryWrapper(err, errCount, result) {
+		if (err){
+  			if (errCount>=3){
+  				console.error ('Failure to retrieve remote file list, beyond retry threashold.');
+				done(err);
+  			} else {
+  				console.error ('Failure to retrieve remote file list, retrying...');
+  				setTimeout(function(){retrieveRemoteFolder(remotedir, errCount+1, retryWrapper),500});
+  			}
+	  	} else {
+	  		compareInner(localdir,result, done);
+	  	} 		
+	}
+	
+	retrieveRemoteFolder(remotedir, 0, retryWrapper);
 };
+
+
+
