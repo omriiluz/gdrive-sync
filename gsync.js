@@ -4,7 +4,10 @@ var googleapis = require('googleapis'),
     readline = require('readline'),
     fs = require('fs'),
     program = require('commander'),
-    async = require('async');
+    async = require('async'),
+    multimeter = require('multimeter');
+
+	var multi;
 
 var mime_types= {
                     '.xls' : 'application/vnd.ms-excel',
@@ -46,6 +49,10 @@ var tokens;
 var FIELDS='items(fileSize,id,mimeType,title,createdDate),nextPageToken';
 
 
+var bars = [];
+var progress = [];
+var deltas = [];
+
 var rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
@@ -53,12 +60,13 @@ var rl = readline.createInterface({
 
 
 program
-  .version('0.3')
+  .version('0.7')
 
 program
   .command('sync <src> <target>')
   .option('-D, --diff-file <csv_file>', 'Write CSV diff file to <csv_file>')
   .option('-L, --limit-changes <percent>', 'Allow sync of changes up to <percent> of files, 1% by default', 1)
+  .option('-R, --reparent <location>', 'Reparent files to be deleted to this location on your google drive', 'toDelete')
   .description('Sync to gdrive')
   .action(function(src, target, options){
     gsync(src.replace(/\\/g,'/'), target, options, false);
@@ -81,6 +89,14 @@ program
     writeGAPITokens(tokens);
   });
 
+  program
+  .command('test')
+  .description('test')
+  .action(function(){
+    console.log('test');
+    test();
+  });
+
   program.on('*', function(args){
     console.log('Unknown command %s', args[0]);
     program.help();
@@ -92,6 +108,7 @@ if (!program.args.length) program.help();
 
 function gsync(src, target, options, listOnly){
   var dstParentId;
+  var toDeleteParentId;
   verifyAuthorization(function(err){
     if (err){
       console.log('Failed to access google drive, try running the \'authorize\' command?');
@@ -105,42 +122,112 @@ function gsync(src, target, options, listOnly){
           process.exit(6);
         } else {
           dstParentId=result;
-          compare(src, dstParentId, function(err,result){
-            if (err)console.log(err);
-            var toSyncArr = sortMap(result.filter(function(e){return (!(!!e.remote && e.local.size==e.remote.size))}),'file');
-            //toSyncArr.forEach(function(e,i,a){console.log(e.file);});
-            var toSyncSize = toSyncArr.reduce(function(previousValue, currentElement, index, array){
-              return previousValue + currentElement.local.size;
-            }, 0);
-            console.log('total local files: ' + result.length + ' files to sync: ' + toSyncArr.length + ' total size to upload: ' + bytesToSize(toSyncSize,2));
-            if (!!options.diffFile){
-              var diffWS=fs.createWriteStream(options.diffFile);
-              diffWS.write('file,size,tosync\n')
-              result.forEach(function(element, index, array){
-                diffWS.write(element.file+ ',' + element.local.size + ',' + ((!!element.remote && element.local.size==element.remote.size)?'0':'1')+'\n');
-              });
-              diffWS.end(function(){process.exit(0)});
-            } 
-            if (!listOnly){
-              if (toSyncArr.length / result.length * 100 > options.limitChanges){
-                console.error('Sync requires upload of ' + (toSyncArr.length / result.length * 100).toFixed(2) + '% of the files, over --limit-changes which is limited to ' + options.limitChanges + '%');
-                process.exit(7);
-              } else {
-                syncFolderStructure(dstParentId, src, toSyncArr, function(err, results){
-                  if (err)console.error(err);
-                  async.mapLimit(toSyncArr, 10, function(item, callback){
-                    upload(item.remote.parent, item.file, callback);
-                  }, function (err, results){
-                    done(err);
-                  })                  
-                });
-              }
-            };
-          })
-        }
+       	  findRemotePathRelative('root', [options.reparent || 'toDelete'], false, function (err, result) {
+        	if (err){
+          		console.error(err);
+          		process.exit(6);
+        	} else {
+	          toDeleteParentId=result;
+	          compare(src, dstParentId, function(err, result, toDelete){
+	            if (err)console.log(err);
+	            var toSyncArr = sortMap(result.filter(function(e){return (!(!!e.remote && e.local.size==e.remote.size))}),'file');
+	            //toSyncArr.forEach(function(e,i,a){console.log(e.file);});
+	            var toSyncSize = toSyncArr.reduce(function(previousValue, currentElement, index, array){
+	              return previousValue + currentElement.local.size;
+	            }, 0);
+	            console.log('total local files: ' + result.length + ' files to sync: ' + toSyncArr.length + ' total size to upload: ' + bytesToSize(toSyncSize,2)+ ' files to delete(reparent): '+toDelete.length);
+	            if (!!options.diffFile){
+	              var diffWS=fs.createWriteStream(options.diffFile);
+	              diffWS.write('file,size,tosync\n')
+	              result.forEach(function(element, index, array){
+	                diffWS.write(element.file+ ',' + element.local.size + ',' + ((!!element.remote && element.local.size==element.remote.size)?'0':'1')+'\n');
+	              });
+	              diffWS.end(function(){process.exit(0)});
+	            } 
+	            if (!listOnly){
+	              var impactedFiles=((toSyncArr.length + toDelete.length) / result.length * 100);
+	              if (impactedFiles > options.limitChanges){
+	                console.error('Sync requires upload/deletion of ' +  impactedFiles.toFixed(2) + '% of the files, over --limit-changes which is limited to ' + options.limitChanges + '%');
+	                process.exit(7);
+	              } else {
+	              	setupUI(4);
+	              	async.mapLimit(toDelete, 2, function(item, callback){
+	              		client.drive.files.update({ 'fileId': item}, {'parents': [{'id': toDeleteParentId}]})
+	                   .withAuthClient(auth)          
+	                   .execute(function(err, result) {
+	            			if (err)console.error(err);
+	            			console.log('file '+item+' reparented');
+	            		   	callback();
+	                    });
+	                }, function (err, results){
+	                	syncFolderStructure(dstParentId, src, toSyncArr, function(err, results){
+		                	if (err)console.error(err);
+		                	var p=0
+		                	async.mapLimit(toSyncArr, 4, function(item, callback){
+		                		var slot=progress.reduce(function(previousValue, currentValue, index, array){
+  									return currentValue==-1?index:previousValue;
+								});
+								progress[slot]=0;
+								pct=p/toSyncArr.length*100;
+								bars[0].percent(pct, Math.round(pct)+'% ('+'hhh'+'/s) ');
+								p++;
+		                  		upload(item.remote.parent, item.file, callback, slot);
+		                	}, function (err, results){
+		                  		done(err);
+		                	})                  
+		              	});
+		            })       
+              	  }	
+            	};
+          	  })
+        	}
+      	  });
+    	}
       });
-    }
+	}
   });
+}
+
+
+function setupUI(threads){
+	multi = multimeter(process);
+	multi.on('^C', process.exit);
+
+	var bar = multi.rel(13, threads, {
+        width : 20,
+        solid : {
+            text : '|',
+            foreground : 'white',
+            background : 'green'
+        },
+        empty : { text : ' ' },
+    });
+    deltas[threads]={'t': new Date().getTime(), 's':0}
+    bars.push(bar);
+    progress.push(-1);
+
+    multi.write('Total\n');
+		
+	for (var i = 0; i < threads; i++) {
+	    var s = 'ABCDE'[i] + ': \n';
+	    multi.write('Thread: '+s);
+	    
+	    var bar = multi.rel(13, i, {
+	        width : 20,
+	        solid : {
+	            text : '|',
+	            foreground : 'white',
+	            background : 'blue'
+	        },
+	        empty : { text : ' ' },
+	    });
+	    deltas[i]={'t': new Date().getTime(), 's':0}
+	    bars.push(bar);
+	    progress.push(-1);
+	}
+
+	multi.offset+=1;
+ 
 }
 
 function sortMap(list, field){
@@ -238,6 +325,8 @@ function verifyAuthorization(callback){
   }
 }
 
+
+
 function getUserHome() {
   return process.env.HOMEPATH || process.env.USERPROFILE ||  process.env.HOME;
 }
@@ -300,7 +389,7 @@ function discoverGAPI(callback){
   });
 }
 
-var upload = function (parent, localFile, callback){
+var uploadorg = function (parent, localFile, callback){
   var title = localFile.split('/').pop();
   fs.readFile(localFile, function(err, data) {
     if (err) {
@@ -311,27 +400,160 @@ var upload = function (parent, localFile, callback){
       if (err){
         callback(err);
       } else if (resp.items.length==0){
-        client.drive.files.insert({ title: title, parents: [{'id': parent}]})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()], data)
-          .withAuthClient(auth)
-          .execute(function(err, result) {
-            console.log('error:', err, 'inserted:', localFile);
+        var c=client.drive.files.insert({ title: title, parents: [{'id': parent}]})
+          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
+          .withAuthClient(auth);
+
+         c.execute(function(err, result) {
+            //console.log('error:', err, 'inserted:', localFile);
+            //multi.offset += 2;
             callback(err,result);
-          });
+         });
       } else if (resp.items.length==1){
-        client.drive.files.update({ 'fileId': resp.items[0].id})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()], data)
-          .withAuthClient(auth)
-          .execute(function(err, result) {
+        var c=client.drive.files.update({ 'fileId': resp.items[0].id})
+          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
+          .withAuthClient(auth);
+         c.execute(function(err, result) {
             console.log('error:', err, 'inserted:', localFile);
             callback(err,result);
-          });
+         });
       } else {
         console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
         callback();
       }    
     });
   });
+}
+
+var upload = function (parent, localFile, callback, slot){
+  var title = localFile.split('/').pop();
+  fs.readFile(localFile, function(err, data) {
+    if (err) {
+      callback (err);
+      return;
+    }
+    client.drive.files.list({'maxResults': 2, 'q': '\''+parent+'\' in parents and title=\''+title+'\'', 'fields': FIELDS}).withAuthClient(auth).execute(function(err,resp) {
+      if (err){
+        callback(err);
+      } else if (resp.items.length==0){
+        var c=client.drive.files.insert({ title: title, parents: [{'id': parent}]})
+          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
+          .withAuthClient(auth);
+
+        var iv;
+        		
+        c.execute(function(err, result) {
+            //console.log('error:', err, 'inserted:', localFile);
+   
+			clearInterval(iv);
+			progress[slot]=-1;
+			deltas[slot]={'t': new Date().getTime(), 's':0};
+            callback(err,result);
+         });
+
+		var req=c.authClient.transporter.innerRequest;
+		req.on('request', function(r2) {
+			r2.on('socket', function(socket){
+					iv=setInterval(function(){
+					var throughput = bytesToSize((socket.socket.bytesWritten-deltas[slot].s)/((new Date().getTime()-deltas[slot].t)/1000),2);
+					deltas[slot]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
+					var p=socket.socket.bytesWritten/data.length*100;
+					progress[slot]=p;
+					bars[slot].percent(progress[slot], Math.round(p)+'% ('+throughput+'/s) '+title+'                  ');
+				},500);
+			})
+		})
+      } else if (resp.items.length==1){
+        var c=client.drive.files.update({ 'fileId': resp.items[0].id})
+          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
+          .withAuthClient(auth);
+         c.execute(function(err, result) {
+            //console.log('error:', err, 'inserted:', localFile);
+            callback(err,result);
+         });
+      } else {
+        console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
+        callback();
+      }    
+    });
+  });
+}
+
+
+function test(callback){
+
+	setupUI();
+	
+	verifyAuthorization(function(err){
+		[0,1,2,3,4].map(function(i){
+		fs.readFile('c:/temp/2.bin', function(err, data) {
+			//console.log(i);
+			if (err)console.error(err);
+			//console.log('start upload')
+		    var c=client.drive.files.insert({ title: '2.bin', parents: [{'id': 'root'}]})
+		    .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
+		    .withAuthClient(auth);
+
+/*
+		    c.authClient.transporter.request2=c.authClient.transporter.request;
+			c.authClient.transporter.request=function(opts, opt_callback){
+			//console.log(opts);
+			//a.authClient.transporter.request2(opts,opt_callback);
+			var req = require('request');
+			
+			opts = c.authClient.transporter.configure(opts);
+				r=req(opts, this.wrapCallback_(opt_callback));
+				c.authClient.transporter.request=c.authClient.transporter.request2;
+				r.on('request', function(r2) {
+					r2.on('socket', function(socket){
+						console.log('============ socket ==========');
+						//console.log(socket);
+						setInterval(function(){console.log('dispatched:'+socket.socket._bytesDispatched )},500);
+					})
+				})
+				//console.log(req);
+			}
+		    c.execute(function(err, result) {
+		    console.log('error:', err, 'inserted:', result);
+		    	var c=client.drive.files.insert({ title: '3.bin', parents: [{'id': 'root'}]})
+		   		 .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
+		   		 .withAuthClient(auth)
+		   		 .execute(function(err, result) {});
+			});
+*/
+			
+			
+			c.execute(function(err, result) {
+		    console.log('error:', err, 'inserted:', result);
+		    	var c=client.drive.files.insert({ title: '3.bin', parents: [{'id': 'root'}]})
+		   		 .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
+		   		 .withAuthClient(auth)
+		   		 .execute(function(err, result) {});
+			});
+			var req=c.authClient.transporter.innerRequest;
+			req.on('request', function(r2) {
+					
+					r2.on('socket', function(socket){
+						//console.log('============ socket ==========');
+						
+
+						//setInterval(function(){console.log('dispatched by '+i+':'+socket.socket.bytesWritten+' '+data.length)},500);
+						var iv=setInterval(function(){
+							var throughput = bytesToSize((socket.socket.bytesWritten-deltas[i].s)/((new Date().getTime()-deltas[i].t)/1000),2);
+							//console.log(throughput+'/S')
+							deltas[i]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
+							var p=socket.socket.bytesWritten/data.length*100;
+							progress[i]=p;
+							bars[i].percent(progress[i], Math.round(p)+'% ('+throughput+'/s)');
+							if (p>=100) clearInterval(iv);
+						},500);
+					})
+				})
+			
+		});
+	
+})
+	});
 }
 
 function findRemotePathRelative(parent, pathArr, mkdir, callback){
@@ -346,7 +568,7 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
           client.drive.files.insert({ title: title, parents: [{'id': parent}], mimeType: 'application/vnd.google-apps.folder'})
             .withAuthClient(auth)
             .execute(function(err, result) {
-              console.log('error:', err, 'created folder:', result.id);
+              //console.log('error:', err, 'created folder:', result.id);
               if (err)callback(err); else findRemotePathRelative(result.id, pathArr, mkdir, callback);
             });
         } else callback('Failed to find remote path - does not exist', null);
@@ -435,34 +657,61 @@ function retrieveRemoteFolder(parent, errCount, resp){
 
 function compare(localdir, remotedir, done) {
   	var results = [];
+  	var toDelete =[];
   	var remotefiles = [];
   	function compareInner(localdir,result, done){
-		for (var item in result){remotefiles[result[item].title]=result[item]};
+		for (var item in result){
+			if (!remotefiles[result[item].title])
+				remotefiles[result[item].title]=[result[item]];
+			else 
+				remotefiles[result[item].title].push(result[item]);
+		};
 	    fs.readdir(localdir, function(err, list) {
 	      if (err) return done(err);
 	      var pending = list.length;
-	      if (!pending) return done(null, results);
+	      if (!pending) return done(null, results, toDelete);
 	      list.forEach(function(filename){
 	        var file = localdir + '/' + filename;
 	        fs.stat(file, function(err, stat) {
 	          if (stat && stat.isDirectory()) {
 	            var rdir=null;
-	            if (!!remotefiles[filename] && remotefiles[filename].mimeType=='application/vnd.google-apps.folder') rdir=remotefiles[filename].id;
-	            compare(file, rdir, function(err, res) {
+	            if (!!remotefiles[filename] && remotefiles[filename].length>1){
+	            	callback('duplicate folder '+filename+'found at remote location, unable to recover.');
+	            	return;
+	            }
+	            if (!!remotefiles[filename] && remotefiles[filename][0].mimeType=='application/vnd.google-apps.folder'){
+	            	rdir=remotefiles[filename][0].id;
+	            	delete remotefiles[filename];
+	            }
+	            compare(file, rdir, function(err, res, todel) {
 	              results = results.concat(res);
-	              if (!--pending) done(null, results);
+	              toDelete = toDelete.concat(todel);
+	              if (!--pending){
+	              	for (var j in remotefiles) if (remotefiles[j]) for (var k in remotefiles[j]) {toDelete.push(remotefiles[j][k].id);}
+	              	done(null, results, toDelete);
+	              }
 	            });           
 	          } else {
+	          	var i=0;
+	          	if (!!remotefiles[filename] && remotefiles[filename].length>1){
+	          		for (i in remotefiles[filename]) if (remotefiles[filename][i].filesize==stat.size) break;
+	          		for (var j in remotefiles[filename]) if (j!=i) toDelete.push(remotefiles[filename][j].id);
+	          	}
 	            results.push({
 	              'file': file,
 	              'local': {
 	                'size': stat.size, 
 	                'created': stat.ctime},
 	              'remote': !!remotefiles[filename]?{
-	                'size': remotefiles[filename].fileSize, 
-	                'created': remotefiles[filename].createdDate} : null
+	              	'id': remotefiles[filename][i].id,
+	                'size': remotefiles[filename][i].fileSize, 
+	                'created': remotefiles[filename][i].createdDate} : null
 	            });
-	            if (!--pending) done(null, results);
+	            delete remotefiles[filename];
+	            if (!--pending){
+	            	for (var j in remotefiles) if (remotefiles[j]) for (var k in remotefiles[j]) {toDelete.push(remotefiles[j][k].id);}
+	            	done(null, results, toDelete);
+	            }
 	          }
 	        });
 	      });
