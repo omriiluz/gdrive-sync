@@ -43,7 +43,7 @@ var CLIENT_ID = '481587742723.apps.googleusercontent.com',
     REDIRECT_URL = 'urn:ietf:wg:oauth:2.0:oob',
     SCOPE = 'https://www.googleapis.com/auth/drive';
 
-var auth, client;
+var auth, client, drive;
 
 var tokens;
 var FIELDS='items(fileSize,id,mimeType,title,createdDate),nextPageToken';
@@ -152,27 +152,26 @@ function gsync(src, target, options, listOnly){
 	              } else {
 	              	setupUI(4);
 	              	async.mapLimit(toDelete, 2, function(item, callback){
-	              		client.drive.files.update({ 'fileId': item}, {'parents': [{'id': toDeleteParentId}]})
-	                   .withAuthClient(auth)          
-	                   .execute(function(err, result) {
-	            			if (err)console.error(err);
-	            			console.log('file '+item+' reparented');
-	            		   	callback();
-	                    });
+	              		drive.files.update({ 'fileId': item, resource: {'parents': [{'id': toDeleteParentId}]}},
+                      function(err, result) {
+    	            			if (err)console.error(err);
+    	            			console.log('file '+item+' reparented');
+    	            		   	callback();
+    	                    });
 	                }, function (err, results){
 	                	syncFolderStructure(dstParentId, src, toSyncArr, function(err, results){
 		                	if (err)console.error(err);
 		                	var p=0
 		                	async.mapLimit(toSyncArr, 4, function(item, callback){
 		                		var slot=progress.reduce(function(previousValue, currentValue, index, array){
-  									return currentValue==-1?index:previousValue;
-								});
-								progress[slot]=0;
-								pct=p/toSyncArr.length*100;
-								bars[0].percent(pct, Math.round(pct)+'% ('+'hhh'+'/s) ');
-								p++;
-		                  		upload(item.remote.parent, item.file, callback, slot);
-		                	}, function (err, results){
+  									       return currentValue==-1?index:previousValue;
+								          });
+								        progress[slot]=0;
+								        pct=p/toSyncArr.length*100;
+								        bars[0].percent(pct, Math.round(pct)+'% ('+'hhh'+'/s) ');
+								        p++;
+		                  	upload(item.remote.parent, item.file, callback, slot);
+		                	 }, function (err, results){
 		                  		done(err);
 		                	})                  
 		              	});
@@ -320,7 +319,7 @@ function verifyAuthorization(callback){
       if (err) 
         callback(err); 
       else
-        client.drive.files.get({'fileId': 'root'}).withAuthClient(auth).execute(function(err,resp) {callback(err);});
+        drive.files.get({'fileId': 'root'},function(err,resp) {callback(err);});
     })
   }
 }
@@ -364,7 +363,7 @@ function readGAPITokens(){
 }
 
 function authorize(){
-  auth = new googleapis.OAuth2Client(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
+  auth = new googleapis.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
   var url = auth.generateAuthUrl({ scope: SCOPE });
   var getAccessToken = function(code) {
     auth.getToken(code, function(err,_tokens) {
@@ -381,12 +380,11 @@ function authorize(){
 }
 
 function discoverGAPI(callback){
-  auth = new googleapis.OAuth2Client(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
-  googleapis.discover('drive', 'v2').execute(function(err, _client) {
-    auth.credentials=tokens;
-    client=_client.withAuthClient(auth); 
-    callback(err);
-  });
+  auth = new googleapis.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
+  auth.credentials=tokens;
+  googleapis.options({auth: auth});
+  drive = googleapis.drive('v2')
+  callback();
 }
 
 var uploadorg = function (parent, localFile, callback){
@@ -396,32 +394,29 @@ var uploadorg = function (parent, localFile, callback){
       callback (err);
       return;
     }
-    client.drive.files.list({'maxResults': 2, 'q': '\''+parent+'\' in parents and title=\''+title+'\'', 'fields': FIELDS}).withAuthClient(auth).execute(function(err,resp) {
+    drive.files.list({'maxResults': 2, 'q': '\''+parent+'\' in parents and title=\''+title+'\'', 'fields': FIELDS}),function(err,resp) {
       if (err){
         callback(err);
       } else if (resp.items.length==0){
-        var c=client.drive.files.insert({ title: title, parents: [{'id': parent}]})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
-          .withAuthClient(auth);
-
-         c.execute(function(err, result) {
+        var c=drive.files.insert({resource: { title: title, parents: [{'id': parent}]},
+          media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+            function(err, result) {
             //console.log('error:', err, 'inserted:', localFile);
             //multi.offset += 2;
             callback(err,result);
          });
       } else if (resp.items.length==1){
-        var c=client.drive.files.update({ 'fileId': resp.items[0].id})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
-          .withAuthClient(auth);
-         c.execute(function(err, result) {
-            console.log('error:', err, 'inserted:', localFile);
-            callback(err,result);
+        var c=drive.files.update({resource: { 'fileId': resp.items[0].id},
+          media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+            function(err, result) {
+              console.log('error:', err, 'inserted:', localFile);
+              callback(err,result);
          });
       } else {
         console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
         callback();
       }    
-    });
+    };
   });
 }
 
@@ -432,44 +427,40 @@ var upload = function (parent, localFile, callback, slot){
       callback (err);
       return;
     }
-    client.drive.files.list({'maxResults': 2, 'q': '\''+parent+'\' in parents and title=\''+title+'\'', 'fields': FIELDS}).withAuthClient(auth).execute(function(err,resp) {
+    drive.files.list({'maxResults': 2, 'q': '\''+parent+'\' in parents and title=\''+title+'\'', 'fields': FIELDS}, function(err,resp) {
       if (err){
         callback(err);
       } else if (resp.items.length==0){
-        var c=client.drive.files.insert({ title: title, parents: [{'id': parent}]})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
-          .withAuthClient(auth);
-
         var iv;
-        		
-        c.execute(function(err, result) {
+        var c=drive.files.insert({resource: { title: title, parents: [{'id': parent}]},
+          media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+            function(err, result) {
             //console.log('error:', err, 'inserted:', localFile);
-   
-			clearInterval(iv);
-			progress[slot]=-1;
-			deltas[slot]={'t': new Date().getTime(), 's':0};
-            callback(err,result);
+        			clearInterval(iv);
+        			progress[slot]=-1;
+        			deltas[slot]={'t': new Date().getTime(), 's':0};
+              callback(err,result);
          });
 
-		var req=c.authClient.transporter.innerRequest;
-		req.on('request', function(r2) {
-			r2.on('socket', function(socket){
-					iv=setInterval(function(){
-					var throughput = bytesToSize((socket.socket.bytesWritten-deltas[slot].s)/((new Date().getTime()-deltas[slot].t)/1000),2);
-					deltas[slot]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
-					var p=socket.socket.bytesWritten/data.length*100;
-					progress[slot]=p;
-					bars[slot].percent(progress[slot], Math.round(p)+'% ('+throughput+'/s) '+title+'                  ');
-				},500);
-			})
-		})
+    		//var req=c.authClient.transporter.innerRequest;
+        var req=c;
+    		req.on('request', function(r2) {
+    			r2.on('socket', function(socket){
+    					iv=setInterval(function(){
+    					var throughput = bytesToSize((socket.socket.bytesWritten-deltas[slot].s)/((new Date().getTime()-deltas[slot].t)/1000),2);
+    					deltas[slot]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
+    					var p=socket.socket.bytesWritten/data.length*100;
+    					progress[slot]=p;
+    					bars[slot].percent(progress[slot], Math.round(p)+'% ('+throughput+'/s) '+title+'                  ');
+    				},500);
+    			})
+    		})
       } else if (resp.items.length==1){
-        var c=client.drive.files.update({ 'fileId': resp.items[0].id})
-          .withMedia(mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], data)
-          .withAuthClient(auth);
-         c.execute(function(err, result) {
-            //console.log('error:', err, 'inserted:', localFile);
-            callback(err,result);
+        var c=drive.files.update({resource: { 'fileId': resp.items[0].id},
+          media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+            function(err, result) {
+              //console.log('error:', err, 'inserted:', localFile);
+             callback(err,result);
          });
       } else {
         console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
@@ -490,46 +481,14 @@ function test(callback){
 			//console.log(i);
 			if (err)console.error(err);
 			//console.log('start upload')
-		    var c=client.drive.files.insert({ title: '2.bin', parents: [{'id': 'root'}]})
-		    .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
-		    .withAuthClient(auth);
-
-/*
-		    c.authClient.transporter.request2=c.authClient.transporter.request;
-			c.authClient.transporter.request=function(opts, opt_callback){
-			//console.log(opts);
-			//a.authClient.transporter.request2(opts,opt_callback);
-			var req = require('request');
-			
-			opts = c.authClient.transporter.configure(opts);
-				r=req(opts, this.wrapCallback_(opt_callback));
-				c.authClient.transporter.request=c.authClient.transporter.request2;
-				r.on('request', function(r2) {
-					r2.on('socket', function(socket){
-						console.log('============ socket ==========');
-						//console.log(socket);
-						setInterval(function(){console.log('dispatched:'+socket.socket._bytesDispatched )},500);
-					})
-				})
-				//console.log(req);
-			}
-		    c.execute(function(err, result) {
-		    console.log('error:', err, 'inserted:', result);
-		    	var c=client.drive.files.insert({ title: '3.bin', parents: [{'id': 'root'}]})
-		   		 .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
-		   		 .withAuthClient(auth)
-		   		 .execute(function(err, result) {});
-			});
-*/
-			
-			
-			c.execute(function(err, result) {
-		    console.log('error:', err, 'inserted:', result);
-		    	var c=client.drive.files.insert({ title: '3.bin', parents: [{'id': 'root'}]})
-		   		 .withMedia(mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], data)
-		   		 .withAuthClient(auth)
-		   		 .execute(function(err, result) {});
-			});
+		    var c=drive.files.insert({resource: { title: '2.bin', parents: [{'id': 'root'}]},
+          media: {mimeType: mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+          function(err, result) {
+    		    console.log('error:', err, 'inserted:', result);
+    		    	var c=drive.files.insert({ resource: { title: '3.bin', parents: [{'id': 'root'}]},
+                media: {mimeType: mime_types[((/\.([a-z])+/i.exec('1.bin'))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
+                  function(err, result) {});
+			     });
 			var req=c.authClient.transporter.innerRequest;
 			req.on('request', function(r2) {
 					
@@ -565,9 +524,8 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
         callback('Failed to find remote path - api returned error', '');
       else if (files.length==0){
         if (mkdir){
-          client.drive.files.insert({ title: title, parents: [{'id': parent}], mimeType: 'application/vnd.google-apps.folder'})
-            .withAuthClient(auth)
-            .execute(function(err, result) {
+          drive.files.insert({ title: title, parents: [{'id': parent}], mimeType: 'application/vnd.google-apps.folder'},
+            function(err, result) {
               //console.log('error:', err, 'created folder:', result.id);
               if (err)callback(err); else findRemotePathRelative(result.id, pathArr, mkdir, callback);
             });
@@ -581,8 +539,8 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
 }
 
 function listFiles(q, callback){
-  client.drive.files
-  .list({'maxResults': 100, 'q': q, 'fields': FIELDS}).withAuthClient(auth).execute(function(err,resp) {
+  drive.files
+  .list({'maxResults': 100, 'q': q, 'fields': FIELDS}, function(err,resp) {
       if (err){console.log(err);};
       callback(!!resp?resp.items:null);
     });
@@ -596,7 +554,7 @@ var retrieved=0;
  */
 function retrieveAllFiles(q, errCount, callback) {
   var retrievePageOfFiles = function(request, result, q) {
-    request.withAuthClient(auth).execute(function(err,resp) {
+    request.execute(function(err,resp) {
       if (err){
           console.log(err);
           callback(err, errCount);
@@ -606,12 +564,12 @@ function retrieveAllFiles(q, errCount, callback) {
         if (retrieved>0) console.log('Retrieved ',retrieved)
         var nextPageToken = resp.nextPageToken;
         if (nextPageToken) {
-          request = client.drive.files.list({
+          request = {execute: function(f) {drive.files.list({
             'pageToken': nextPageToken,
             'maxResults': 1000,
             'q': q,
             'fields': FIELDS
-          });
+          },f)}};
           retrievePageOfFiles(request, result, q);
         } else {
           callback(null, errCount, result);
@@ -619,7 +577,7 @@ function retrieveAllFiles(q, errCount, callback) {
       }
     });
   }
-  var initialRequest = client.drive.files.list({'maxResults': 1000, 'q': q, 'fields': FIELDS});
+  var initialRequest = {execute: function(f) {drive.files.list({'maxResults': 1000, 'q': q, 'fields': FIELDS},f)}};
   retrievePageOfFiles(initialRequest, [], q);
 }
 
