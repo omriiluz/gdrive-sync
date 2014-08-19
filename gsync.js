@@ -524,7 +524,7 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
         callback('Failed to find remote path - api returned error', '');
       else if (files.length==0){
         if (mkdir){
-          drive.files.insert({ title: title, parents: [{'id': parent}], mimeType: 'application/vnd.google-apps.folder'},
+          drive.files.insert({resource: { title: title, parents: [{'id': parent}], mimeType: 'application/vnd.google-apps.folder'}},
             function(err, result) {
               //console.log('error:', err, 'created folder:', result.id);
               if (err)callback(err); else findRemotePathRelative(result.id, pathArr, mkdir, callback);
