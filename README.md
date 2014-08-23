@@ -27,7 +27,7 @@ Sync local files to Google Drive using Node.JS. Fast and portable.
     -V, --version  output the version number
 
 -----------------------------------------------------
-  Usage: gsync sync [options] <src>,<target>
+  Usage: gsync sync [options] src target
 
   Options:
 
@@ -37,7 +37,7 @@ Sync local files to Google Drive using Node.JS. Fast and portable.
     -R, --reparent <location>      Reparent files to be deleted to this location on your google drive
 
 -----------------------------------------------------
-  Usage: gsync list [options] <src>,<target>
+  Usage: gsync list [options] src target
 
   Options:
 
