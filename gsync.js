@@ -692,6 +692,3 @@ function compare(localdir, remotedir, done) {
 	
 	retrieveRemoteFolder(remotedir, 0, retryWrapper);
 };
-
-
-
