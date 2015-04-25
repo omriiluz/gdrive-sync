@@ -101,7 +101,7 @@ program
     console.log('Unknown command %s', args[0]);
     program.help();
   });
-  
+
 
 program.parse(process.argv);
 if (!program.args.length) program.help();
@@ -143,7 +143,7 @@ function gsync(src, target, options, listOnly){
 	                diffWS.write(element.file+ ',' + element.local.size + ',' + ((!!element.remote && element.local.size==element.remote.size)?'0':'1')+'\n');
 	              });
 	              diffWS.end(function(){process.exit(0)});
-	            } 
+	            }
 	            if (!listOnly){
 	              var impactedFiles=((toSyncArr.length + toDelete.length) / result.length * 100);
 	              if (impactedFiles > options.limitChanges){
@@ -173,10 +173,10 @@ function gsync(src, target, options, listOnly){
 		                  	upload(item.remote.parent, item.file, callback, slot);
 		                	 }, function (err, results){
 		                  		done(err);
-		                	})                  
+		                	})
 		              	});
-		            })       
-              	  }	
+		            })
+              	  }
             	};
           	  })
         	}
@@ -206,11 +206,11 @@ function setupUI(threads){
     progress.push(-1);
 
     multi.write('Total\n');
-		
+
 	for (var i = 0; i < threads; i++) {
 	    var s = 'ABCDE'[i] + ': \n';
 	    multi.write('Thread: '+s);
-	    
+
 	    var bar = multi.rel(13, i, {
 	        width : 20,
 	        solid : {
@@ -226,7 +226,7 @@ function setupUI(threads){
 	}
 
 	multi.offset+=1;
- 
+
 }
 
 function sortMap(list, field){
@@ -246,7 +246,7 @@ function sortMap(list, field){
 }
 
 function done(err){
-  if (err)console.error(err);
+  if (err){debugger;console.error(err);}
   console.log('complete');
   process.exit(0);
 }
@@ -286,27 +286,27 @@ function syncFolderStructure(dstParentId, src, toSyncArr, callback){
  * @return string
  */
 function bytesToSize(bytes, precision)
-{  
+{
     var kilobyte = 1024;
     var megabyte = kilobyte * 1024;
     var gigabyte = megabyte * 1024;
     var terabyte = gigabyte * 1024;
-   
+
     if ((bytes >= 0) && (bytes < kilobyte)) {
         return bytes + ' B';
- 
+
     } else if ((bytes >= kilobyte) && (bytes < megabyte)) {
         return (bytes / kilobyte).toFixed(precision) + ' KB';
- 
+
     } else if ((bytes >= megabyte) && (bytes < gigabyte)) {
         return (bytes / megabyte).toFixed(precision) + ' MB';
- 
+
     } else if ((bytes >= gigabyte) && (bytes < terabyte)) {
         return (bytes / gigabyte).toFixed(precision) + ' GB';
- 
+
     } else if (bytes >= terabyte) {
         return (bytes / terabyte).toFixed(precision) + ' TB';
- 
+
     } else {
         return bytes + ' B';
     }
@@ -316,8 +316,8 @@ function verifyAuthorization(callback){
   tokens=readGAPITokens();
   if (!tokens) callback('Failure to retrieve tokens'); else {
     discoverGAPI(function(err){
-      if (err) 
-        callback(err); 
+      if (err)
+        callback(err);
       else
         drive.files.get({'fileId': 'root'},function(err,resp) {callback(err);});
     })
@@ -406,7 +406,7 @@ var uploadorg = function (parent, localFile, callback){
             callback(err,result);
          });
       } else if (resp.items.length==1){
-        var c=drive.files.update({resource: { 'fileId': resp.items[0].id},
+        var c=drive.files.update({ 'fileId': resp.items[0].id,
           media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
             function(err, result) {
               console.log('error:', err, 'inserted:', localFile);
@@ -415,7 +415,7 @@ var uploadorg = function (parent, localFile, callback){
       } else {
         console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
         callback();
-      }    
+      }
     };
   });
 }
@@ -442,21 +442,20 @@ var upload = function (parent, localFile, callback, slot){
               callback(err,result);
          });
 
-    		//var req=c.authClient.transporter.innerRequest;
         var req=c;
     		req.on('request', function(r2) {
     			r2.on('socket', function(socket){
     					iv=setInterval(function(){
-    					var throughput = bytesToSize((socket.socket.bytesWritten-deltas[slot].s)/((new Date().getTime()-deltas[slot].t)/1000),2);
-    					deltas[slot]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
-    					var p=socket.socket.bytesWritten/data.length*100;
+    					var throughput = bytesToSize((socket.bytesWritten-deltas[slot].s)/((new Date().getTime()-deltas[slot].t)/1000),2);
+    					deltas[slot]={'t': new Date().getTime(), 's':socket.bytesWritten}
+    					var p=socket.bytesWritten/data.length*100;
     					progress[slot]=p;
     					bars[slot].percent(progress[slot], Math.round(p)+'% ('+throughput+'/s) '+title+'                  ');
     				},500);
     			})
     		})
       } else if (resp.items.length==1){
-        var c=drive.files.update({resource: { 'fileId': resp.items[0].id},
+        var c=drive.files.update({'fileId': resp.items[0].id,
           media: {mimeType: mime_types[((/\.([a-z])+/i.exec(title))[0]||'default').toLowerCase()]||mime_types['default'], body: data}},
             function(err, result) {
               //console.log('error:', err, 'inserted:', localFile);
@@ -465,7 +464,7 @@ var upload = function (parent, localFile, callback, slot){
       } else {
         console.error('Multiple remote files exist for file ' + localFile + ' unable to sync.');
         callback();
-      }    
+      }
     });
   });
 }
@@ -474,7 +473,7 @@ var upload = function (parent, localFile, callback, slot){
 function test(callback){
 
 	setupUI();
-	
+
 	verifyAuthorization(function(err){
 		[0,1,2,3,4].map(function(i){
 		fs.readFile('c:/temp/2.bin', function(err, data) {
@@ -491,26 +490,26 @@ function test(callback){
 			     });
 			var req=c.authClient.transporter.innerRequest;
 			req.on('request', function(r2) {
-					
+
 					r2.on('socket', function(socket){
 						//console.log('============ socket ==========');
-						
+
 
 						//setInterval(function(){console.log('dispatched by '+i+':'+socket.socket.bytesWritten+' '+data.length)},500);
 						var iv=setInterval(function(){
-							var throughput = bytesToSize((socket.socket.bytesWritten-deltas[i].s)/((new Date().getTime()-deltas[i].t)/1000),2);
+							var throughput = 0//bytesToSize((socket.socket.bytesWritten-deltas[i].s)/((new Date().getTime()-deltas[i].t)/1000),2);
 							//console.log(throughput+'/S')
-							deltas[i]={'t': new Date().getTime(), 's':socket.socket.bytesWritten}
-							var p=socket.socket.bytesWritten/data.length*100;
+							deltas[i]={'t': new Date().getTime(), 's':0}//socket.socket.bytesWritten}
+							var p=0//socket.socket.bytesWritten/data.length*100;
 							progress[i]=p;
 							bars[i].percent(progress[i], Math.round(p)+'% ('+throughput+'/s)');
 							if (p>=100) clearInterval(iv);
 						},500);
 					})
 				})
-			
+
 		});
-	
+
 })
 	});
 }
@@ -520,7 +519,7 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
   else {
     var title=pathArr.shift();
     listFiles('\''+parent+'\' in parents and title=\''+title+'\' and mimeType=\'application/vnd.google-apps.folder\'', function(files){
-      if (!files) 
+      if (!files)
         callback('Failed to find remote path - api returned error', '');
       else if (files.length==0){
         if (mkdir){
@@ -530,9 +529,9 @@ function findRemotePathRelative(parent, pathArr, mkdir, callback){
               if (err)callback(err); else findRemotePathRelative(result.id, pathArr, mkdir, callback);
             });
         } else callback('Failed to find remote path - does not exist', null);
-      } else if (files.length==1) 
+      } else if (files.length==1)
           findRemotePathRelative(files[0].id, pathArr, mkdir, callback);
-        else 
+        else
           callback('Failed to find remote path - duplicate', null);
     });
   };
@@ -621,7 +620,7 @@ function compare(localdir, remotedir, done) {
 		for (var item in result){
 			if (!remotefiles[result[item].title])
 				remotefiles[result[item].title]=[result[item]];
-			else 
+			else
 				remotefiles[result[item].title].push(result[item]);
 		};
 	    fs.readdir(localdir, function(err, list) {
@@ -648,7 +647,7 @@ function compare(localdir, remotedir, done) {
 	              	for (var j in remotefiles) if (remotefiles[j]) for (var k in remotefiles[j]) {toDelete.push(remotefiles[j][k].id);}
 	              	done(null, results, toDelete);
 	              }
-	            });           
+	            });
 	          } else {
 	          	var i=0;
 	          	if (!!remotefiles[filename] && remotefiles[filename].length>1){
@@ -658,11 +657,11 @@ function compare(localdir, remotedir, done) {
 	            results.push({
 	              'file': file,
 	              'local': {
-	                'size': stat.size, 
+	                'size': stat.size,
 	                'created': stat.ctime},
 	              'remote': !!remotefiles[filename]?{
 	              	'id': remotefiles[filename][i].id,
-	                'size': remotefiles[filename][i].fileSize, 
+	                'size': remotefiles[filename][i].fileSize,
 	                'created': remotefiles[filename][i].createdDate} : null
 	            });
 	            delete remotefiles[filename];
@@ -687,8 +686,8 @@ function compare(localdir, remotedir, done) {
   			}
 	  	} else {
 	  		compareInner(localdir,result, done);
-	  	} 		
+	  	}
 	}
-	
+
 	retrieveRemoteFolder(remotedir, 0, retryWrapper);
 };
